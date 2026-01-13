@@ -1,0 +1,13 @@
+# .dockerignore
+.git
+__pycache__
+*.pyc
+*.ipynb_checkpoints
+
+# 대용량 데이터 및 모델 제외 (K8s에서는 Volume 마운트로 해결)
+train_data/
+test_data/
+checkpoints/
+logs/
+*.pth
+*.pt

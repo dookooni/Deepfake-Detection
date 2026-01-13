@@ -1,0 +1,20 @@
+project_name: "Deepfake DINOv3"
+
+model:
+  name: "vit_huge_plus_patch16_dinov3.lvd1689m"
+  num_classes: 2
+  checkpoint_path: "./model/timm_dinov3.pth"
+
+data:
+  train_data: "./train_data/celeb_df/"
+  eval_data: "./test_data/"
+  image_size: 512
+  frames_per_video: 10
+
+train:
+  lr: 1e-6
+  batch_size: 32
+  epochs: 100
+  device: "cuda"
+  num_workers: 8
+  log_interval: 10

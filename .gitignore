@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+src/__pycache__/
+
+# Editor settings (VS Code)
+.vscode/
+
+# Model Weights (Large Files)
+model/*.pth
+*.pth
+
+# Config
+config/k8s_settings.yaml
+
+# Datasets
+train_data/
+test_data/
+
+# Environment (Optional - if you want to keep yaml/txt but ignore local env folder)
+# env/ 가상환경 폴더 자체를 만들어서 쓰는 경우 아래 주석 해제
+# env/
+
+# System files
+.DS_Store

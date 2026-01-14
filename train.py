@@ -16,7 +16,7 @@ from src.dataset import Celeb_DF, Celeb_DF_FaceCrop
 from src.utils import RandomJPEGCompression, get_llrd_params, split_faceforensics, split_celeb_df
 
 import numpy as np
-from sklearn.model_selection import train_test_split, GroupShuffleSplit
+from sklearn.model_selection import train_test_split
 
 def train_one_epoch(epoch, model, dataloader, optimizer, criterion, accelerator):
     model.train()

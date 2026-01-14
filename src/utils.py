@@ -1,10 +1,12 @@
 import torchvision.transforms as transforms
 from torchvision.transforms import functional as F
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, GroupShuffleSplit
 import random
 from PIL import Image
 from insightface.app import FaceAnalysis
 import decord
+import os
+import re
 
 class RandomJPEGCompression:
     def __init__(self, quality_range=(40, 90), p=0.5):
@@ -156,4 +158,4 @@ def split_celeb_df(root_dir, test_ratio=0.2):
     else:
         print("[SUCCESS] Identity-Disjoint Split Completed (인물 기준 완벽 분리됨).")
 
-    return train_list, eval_list
+    return crop_train, crop_eval

@@ -6,7 +6,7 @@ model:
   checkpoint_path: "./model/timm_dinov3.pth"
 
 data:
-  train_data: "./train_data/celeb_df/"
+  train_data: "./train_data/"
   eval_data: "./test_data/"
   image_size: 512
   frames_per_video: 10

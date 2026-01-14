@@ -4,6 +4,7 @@ import torch
 from torch.utils.data import Dataset
 from PIL import Image
 import json
+import cv2
 try:
     import decord
     from decord import cpu
@@ -91,11 +92,29 @@ class Celeb_DF_FaceCrop(Dataset):
         for rel_v_path, folder_name in video_list:
             label = self.label_map.get(folder_name, 0)
             v_full_path = os.path.join(self.root_dir, rel_v_path)
+
+            # Meta data
+            fol = rel_v_path.split('/')[1]
+            fol = os.path.splitext(fol)[0]
+            meta_path = os.path.join(self.root_dir, rel_v_path.split('/')[0], fol, fol + '.json')
             
-            for i in range(frames_per_video):
-                img_path = os.path.join(v_full_path, f"{i}.jpg")
-                if os.path.exists(img_path):
-                    self.samples.append((img_path, label))
+            with open(meta_path, 'r') as f:
+                meta = json.load(f)
+            
+            frames = meta.get("frames")
+            for frame in frames:
+                frame_idx = frame.get("frame_idx")
+                landmarks = frame.get("landmarks")
+                bbox = frame.get("bbox")
+
+                self.samples.append({
+                    'path': v_full_path,
+                    'frame_idx': frame_idx,
+                    'bbox': bbox,
+                    'landmarks': landmarks,
+                    'label': label,
+                    'type': 'video'
+                })
 
     def __len__(self):
         return len(self.samples)
@@ -146,12 +165,59 @@ class Celeb_DF_FaceCrop(Dataset):
         return [tx1, ty1, tx2, ty2]
 
     def __getitem__(self, idx):
-        img_path, label = self.samples[idx]
-        image = Image.open(img_path).convert('RGB')
+        sample = self.samples[idx]
+        file_path = sample['path']
+        frame_idx = sample['frame_idx']
+        bbox = sample['bbox']
+        landmarks = sample['landmarks']
+        label = sample['label']
         
-        if self.transform:
-            image = self.transform(image)
+        try:
+            if decord is None:
+                raise ImportError("decord not found")
+                
+            vr = decord.VideoReader(file_path, ctx=cpu(0))
+            frame = vr[frame_idx].asnumpy() # [H, W, 3] numpy array
+            h, w, _ = frame.shape
             
+            if landmarks is not None:
+                M = self._get_rotation_matrix(landmarks)
+                if M is not None:
+                    frame = cv2.warpAffine(frame, M, (w, h), flags=cv2.INTER_CUBIC)
+                    
+                    if bbox is not None:
+                        bbox = self._rotate_bbox(bbox, M, w, h)
+
+            scales = [1.2, 1.5, 2.0]
+            probs = [0.2, 0.6, 0.2]
+            scale = np.random.choice(scales, p=probs)
+
+            if bbox is not None:
+                x1, y1, x2, y2 = map(int, bbox)
+                
+                center_x = (x2 - x1) // 2 + x1
+                center_y = (y2 - y1) // 2 + y1
+                new_center_w = (x2 - x1) * scale
+                new_center_h = (y2 - y1) * scale
+                
+                x1 = int(center_x - new_center_w // 2)
+                y1 = int(center_y - new_center_h // 2)
+                x2 = int(center_x + new_center_w // 2)
+                y2 = int(center_y + new_center_h // 2)
+
+                x1 = max(0, x1); y1 = max(0, y1)
+                x2 = min(w, x2); y2 = min(h, y2)
+                if x2 > x1 and y2 > y1:
+                    frame = frame[y1:y2, x1:x2]
+            
+            image = Image.fromarray(frame)
+        except Exception as e:
+            print(f"Error loading {file_path}: {e}")
+            image = Image.new('RGB', (224, 224), (0, 0, 0))
+
+        if self.transform is not None:
+            image = self.transform(image)
+
         return image, label
 
 
@@ -194,6 +260,7 @@ class FaceForensics(Dataset):
                         'path': video_path,
                         'frame_idx': frame_idx,
                         'bbox': bbox,
+                        'landmarks': landmarks,
                         'label': label,
                         'type': 'video'
                     })
@@ -248,6 +315,7 @@ class FaceForensics(Dataset):
         file_path = sample['path']
         frame_idx = sample['frame_idx']
         bbox = sample['bbox']
+        landmarks = sample['landmarks']
         label = sample['label']
         
         try:
@@ -261,7 +329,7 @@ class FaceForensics(Dataset):
             if landmarks is not None:
                 M = self._get_rotation_matrix(landmarks)
                 if M is not None:
-                    frame = cv2.warpAffien(frame, M, (w, h), flags=cv2.INTER_CUBIC)
+                    frame = cv2.warpAffine(frame, M, (w, h), flags=cv2.INTER_CUBIC)
                     
                     if bbox is not None:
                         bbox = self._rotate_bbox(bbox, M, w, h)
@@ -324,16 +392,13 @@ class DFDC(Dataset):
                     continue
 
                 label = 0
-                if 'fake' in root.lower() or ('fake' in meta.get('file_path').lower()):
+                if 'fake' in root.lower() or ('fake' in meta.get('file_path', '').lower()):
                     label = 1
                 
                 file_type = meta.get('type', 'image')
                 file_path_rel = meta.get('file_path')
                 
-                if file_path_rel:
-                     if file_path_rel.startswith('./'):
-                         pass
-                else:
+                if not file_path_rel:
                     continue
 
                 for item in meta.get('data', []):
@@ -341,6 +406,7 @@ class DFDC(Dataset):
                         'path': file_path_rel,
                         'type': file_type,
                         'bbox': item.get('bbox'),
+                        'landmarks': item.get('landmarks'),
                         'label': label,
                         'frame_idx': item.get('frame_idx', 0)
                     })
@@ -350,22 +416,42 @@ class DFDC(Dataset):
     def __len__(self):
         return len(self.samples)
 
+    def _get_rotation_matrix(self, landmarks):
+        """ 랜드마크(눈)를 기준으로 회전 매트릭스를 계산하는 함수 """
+        if landmarks is None or len(landmarks) < 2:
+            return None
+        
+        if isinstance(landmarks, list):
+            landmarks = np.array(landmarks)
+        
+        left_eye = landmarks[0]
+        right_eye = landmarks[1]
+        
+        eye_center = ((left_eye[0] + right_eye[0]) / 2, (left_eye[1] + right_eye[1]) / 2)
+        
+        dy = right_eye[1] - left_eye[1]
+        dx = right_eye[0] - left_eye[0]
+        angle = np.degrees(np.arctan2(dy, dx))
+        
+        M = cv2.getRotationMatrix2D(eye_center, angle, 1.0)
+        return M
+
     def __getitem__(self, idx):
         sample = self.samples[idx]
         file_path = sample['path']
         file_type = sample['type']
         label = sample['label']
         bbox = sample['bbox']
+        landmarks = sample['landmarks']
         
         image = None
         
         try:
+            frame = None
             if file_type == 'image':
-                image = Image.open(file_path).convert('RGB')
-                if bbox is not None:
-                    x1, y1, x2, y2 = map(int, bbox)
-                    if x2 > x1 and y2 > y1:
-                        image = image.crop((x1, y1, x2, y2))
+                frame = cv2.imread(file_path)
+                if frame is not None:
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 
             elif file_type == 'video':
                 if decord is None:
@@ -373,18 +459,23 @@ class DFDC(Dataset):
                 vr = decord.VideoReader(file_path, num_threads=1)
                 frame_idx = sample['frame_idx']
                 if frame_idx >= len(vr): frame_idx = len(vr) - 1
-                frame = vr[frame_idx].asnumpy()
-                
-                if bbox is not None:
-                    x1, y1, x2, y2 = map(int, bbox)
-                    h, w, _ = frame.shape
-                    x1 = max(0, x1); y1 = max(0, y1)
-                    x2 = min(w, x2); y2 = min(h, y2)
-                    if x2 > x1 and y2 > y1:
-                        frame = frame[y1:y2, x1:x2]
-                image = Image.fromarray(frame)
+                frame = vr[frame_idx].asnumpy() # RGB
 
-        except Exception:
+            if frame is not None:
+                h, w, _ = frame.shape
+                
+                # Alignment (Rotation only, No Cropping as requested)
+                if landmarks is not None:
+                    M = self._get_rotation_matrix(landmarks)
+                    if M is not None:
+                        frame = cv2.warpAffine(frame, M, (w, h), flags=cv2.INTER_CUBIC)
+
+                image = Image.fromarray(frame)
+            else:
+                 image = Image.new('RGB', (224, 224), (0, 0, 0))
+
+        except Exception as e:
+            # print(f"Error: {e}")
             image = Image.new('RGB', (224, 224), (0, 0, 0))
 
         if self.transform:
@@ -419,17 +510,20 @@ class WildDeepfake(Dataset):
                 meta_path = os.path.join(meta_dir, json_name)
                 
                 bbox = None
+                landmarks = None
                 if os.path.exists(meta_path):
                     try:
                         with open(meta_path, 'r') as f:
                             meta = json.load(f)
                         bbox = meta.get('bbox')
+                        landmarks = meta.get('landmarks')
                     except:
                         pass
                 
                 self.samples.append({
                     'path': img_path,
                     'bbox': bbox,
+                    'landmarks': landmarks,
                     'label': label
                 })
 
@@ -438,18 +532,46 @@ class WildDeepfake(Dataset):
     def __len__(self):
         return len(self.samples)
 
+    def _get_rotation_matrix(self, landmarks):
+        """ 랜드마크(눈)를 기준으로 회전 매트릭스를 계산하는 함수 """
+        if landmarks is None or len(landmarks) < 2:
+            return None
+        
+        if isinstance(landmarks, list):
+            landmarks = np.array(landmarks)
+        
+        left_eye = landmarks[0]
+        right_eye = landmarks[1]
+        
+        eye_center = ((left_eye[0] + right_eye[0]) / 2, (left_eye[1] + right_eye[1]) / 2)
+        
+        dy = right_eye[1] - left_eye[1]
+        dx = right_eye[0] - left_eye[0]
+        angle = np.degrees(np.arctan2(dy, dx))
+        
+        M = cv2.getRotationMatrix2D(eye_center, angle, 1.0)
+        return M
+
     def __getitem__(self, idx):
         sample = self.samples[idx]
         img_path = sample['path']
         label = sample['label']
         bbox = sample['bbox']
+        landmarks = sample['landmarks']
         
         try:
-            image = Image.open(img_path).convert('RGB')
-            if bbox is not None:
-                x1, y1, x2, y2 = map(int, bbox)
-                if x2 > x1 and y2 > y1:
-                    image = image.crop((x1, y1, x2, y2))
+            frame = cv2.imread(img_path)
+            if frame is None:
+                 raise FileNotFoundError
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w, _ = frame.shape
+
+            if landmarks is not None:
+                M = self._get_rotation_matrix(landmarks)
+                if M is not None:
+                    frame = cv2.warpAffine(frame, M, (w, h), flags=cv2.INTER_CUBIC)
+
+            image = Image.fromarray(frame)
         except Exception:
             image = Image.new('RGB', (224, 224), (0, 0, 0))
             

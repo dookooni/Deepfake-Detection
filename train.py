@@ -118,6 +118,7 @@ def main():
     crop_root = os.path.join(train_data_path, "Dataset", "celeb_df")
     crop_train, crop_eval = split_celeb_df(train_data_path)
 
+    # Celeb-DF Datasets
     crop_train_dataset = Celeb_DF_FaceCrop(crop_train, root_dir=crop_root, transform=train_transform, frames_per_video=frames_per_video)
     crop_eval_dataset = Celeb_DF_FaceCrop(crop_eval, root_dir=crop_root, transform=eval_transform, frames_per_video=frames_per_video)
 

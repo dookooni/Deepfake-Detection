@@ -59,31 +59,30 @@
 │   └── base_config.yaml       # 하이퍼파라미터 및 경로 설정
 ├── train.py                   # Accelerator 기반 분산 학습 메인 스크립트
 └── test.py                    # 벤치마크 데이터셋 성능 평가 스크립트
-
+```
 
 --- 
-
-# 📝 Usage
+## 📝 Usage
 ### 1. 환경 구축
-```
+```bash
 pip install torch torchvision torchaudio
 pip install insightface decord accelerate tqdm opencv-python
 ```
 
 ### 2. 데이터 전처리 (JSON 생성)
 모든 데이터셋을 스캔하여 얼굴 좌표 및 랜드마크를 생성. (GPU 기반 병렬 처리 지원)
-```
+```bash
 python data_preproces.py
 ```
 
 ### 3. 학습 시작
 accelerate 설정을 마친 후 멀티 GPU 환경에서 학습을 최적화한다.
-```
+```bash
 accelerate launch train.py
 ```
 
 ---
-# 💡 Roadmap
+## 💡 Roadmap
 
 - [ ] SBI (Self-Blended Images) 기법 도입을 통한 미학습 도메인 일반화 강화.
 - [ ] Frequency Domain Layer: 주파수 아티팩트 탐지를 위한 DCT 분석 모듈 추가.

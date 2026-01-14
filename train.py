@@ -13,7 +13,7 @@ from src.models import DeepfakeClassifierDINOv3
 from tqdm.auto import tqdm
 
 from src.dataset import Celeb_DF, Celeb_DF_FaceCrop
-from src.utils import RandomJPEGCompression, get_llrd_params
+from src.utils import RandomJPEGCompression, get_llrd_params, split_faceforensics, split_celeb_df
 
 import numpy as np
 from sklearn.model_selection import train_test_split, GroupShuffleSplit
@@ -114,46 +114,9 @@ def main():
     if accelerator.is_main_process:
         accelerator.print(f"Loading data from: {train_data_path}")
 
-    # Face Crop Data
-    crop_root = os.path.join(train_data_path, "preprocessed_crops")
-    all_videos = []
-    all_groups = []
-    for folder_name in os.listdir(crop_root):
-        folder_path = os.path.join(crop_root, folder_name)
-        if not os.path.isdir(folder_path):
-            continue
-
-        video_names = sorted(os.listdir(folder_path))
-        for vid in video_names:
-            if vid.startswith("."): continue
-        
-            group_id = None
-            if folder_name == "YouTube-real":
-                group_id = f"yt_{vid}"
-            else:
-                group_id = re.split(r'[_-]', vid)[0]
-
-            video_rel_path = os.path.join(folder_name, vid)
-            all_videos.append((video_rel_path, folder_name))
-            all_groups.append(group_id)
-
-    gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
-    train_idx, eval_idx = next(gss.split(all_videos, groups=all_groups))
-
-    crop_train = [all_videos[i] for i in train_idx]
-    crop_eval = [all_videos[i] for i in eval_idx]
-
-    train_groups = set([all_groups[i] for i in train_idx])
-    eval_groups = set([all_groups[i] for i in eval_idx])
-    intersection = train_groups.intersection(eval_groups)
-
-    accelerator.print(f"Total Videos: {len(all_videos)}")
-    accelerator.print(f"Train Videos: {len(crop_train)} | Eval Videos: {len(crop_eval)}")
-    
-    if len(intersection) > 0:
-        accelerator.print(f"[CRITICAL WARNING] ID Leakage Detected! {list(intersection)[:5]}...")
-    else:
-        accelerator.print("[SUCCESS] Identity-Disjoint Split Completed (인물 기준 완벽 분리됨).")
+    # Celeb-DF Split
+    crop_root = os.path.join(train_data_path, "Dataset", "celeb_df")
+    crop_train, crop_eval = split_celeb_df(train_data_path)
 
     crop_train_dataset = Celeb_DF_FaceCrop(crop_train, root_dir=crop_root, transform=train_transform, frames_per_video=frames_per_video)
     crop_eval_dataset = Celeb_DF_FaceCrop(crop_eval, root_dir=crop_root, transform=eval_transform, frames_per_video=frames_per_video)

@@ -32,7 +32,7 @@ def process_chunk(gpu_id, file_list):
     """
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     detector = FaceAnalysis(name='buffalo_l', providers=['CUDAExecutionProvider'])
-    detector.prepare(ctx_id=gpu_id, det_size=(640, 640))
+    detector.prepare(ctx_id=gpu_id, det_size=(224, 224))
     
     for full_path, rel_dir, fname, ftype in tqdm(file_list, desc=f"GPU {gpu_id}"):
         try:

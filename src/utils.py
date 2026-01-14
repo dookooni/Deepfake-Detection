@@ -20,43 +20,6 @@ class RandomJPEGCompression:
             img = Image.open(buffer)
         return img
 
-def get_llrd_params(model, base_lr, decay_rate=0.75):
-    n_blocks = len(model.backbone.blocks)
-    param_groups = []
-    
-    seen_names = set()
-
-    head_params = []
-    for name, param in model.named_parameters():
-        if ("head" in name or "backbone.norm" in name) and name not in seen_names:
-            head_params.append(param)
-            seen_names.add(name)
-    if head_params:
-        param_groups.append({"params": head_params, "lr": base_lr})
-
-    for i in range(n_blocks - 1, -1, -1):
-        lr = base_lr * (decay_rate ** (n_blocks - i))
-        block_params = []
-        for name, param in model.named_parameters():
-            if f"blocks.{i}." in name and name not in seen_names:
-                block_params.append(param)
-                seen_names.add(name)
-        if block_params:
-            param_groups.append({"params": block_params, "lr": lr})
-    
-    rest_params = []
-    for name, param in model.named_parameters():
-        if name not in seen_names:
-            rest_params.append(param)
-            seen_names.add(name)
-    if rest_params:
-        param_groups.append({
-            "params": rest_params, 
-            "lr": base_lr * (decay_rate ** (n_blocks + 1))
-        })
-
-    return param_groups
-
 class UniversalDetector:
     def __init__(self, gpu_id=0):
         self.app = FaceAnalysis(name='buffalo_l', providers=['CUDAExecutionProvider'])
@@ -99,6 +62,43 @@ class UniversalDetector:
             "score": float(face.det_score)
         }
 
+def get_llrd_params(model, base_lr, decay_rate=0.75):
+    n_blocks = len(model.backbone.blocks)
+    param_groups = []
+    
+    seen_names = set()
+
+    head_params = []
+    for name, param in model.named_parameters():
+        if ("head" in name or "backbone.norm" in name) and name not in seen_names:
+            head_params.append(param)
+            seen_names.add(name)
+    if head_params:
+        param_groups.append({"params": head_params, "lr": base_lr})
+
+    for i in range(n_blocks - 1, -1, -1):
+        lr = base_lr * (decay_rate ** (n_blocks - i))
+        block_params = []
+        for name, param in model.named_parameters():
+            if f"blocks.{i}." in name and name not in seen_names:
+                block_params.append(param)
+                seen_names.add(name)
+        if block_params:
+            param_groups.append({"params": block_params, "lr": lr})
+    
+    rest_params = []
+    for name, param in model.named_parameters():
+        if name not in seen_names:
+            rest_params.append(param)
+            seen_names.add(name)
+    if rest_params:
+        param_groups.append({
+            "params": rest_params, 
+            "lr": base_lr * (decay_rate ** (n_blocks + 1))
+        })
+
+    return param_groups
+
 def split_faceforensics(root_dir, test_ratio=0.2):
     video_ids = set()
 
@@ -112,4 +112,48 @@ def split_faceforensics(root_dir, test_ratio=0.2):
     train_ids, val_ids = train_test_split(sorted(list(video_ids)), test_size=test_ratio, random_state=42)
 
     return train_ids, val_ids
+
+def split_celeb_df(root_dir, test_ratio=0.2):
+    crop_root = os.path.join(root_dir, "Dataset", "celeb_df")
+
+    all_videos = []
+    all_groups = []
+
+    for folder_name in os.listdir(crop_root):
+        folder_path = os.path.join(crop_root, folder_name)
+        if not os.path.isdir(folder_path):
+            continue
+
+        video_names = sorted(os.listdir(folder_path))
+        for vid in video_names:
+            if vid.startswith("."): continue
+        
+            group_id = None
+            if folder_name == "YouTube-real":
+                group_id = f"yt_{vid}"
+            else:
+                group_id = re.split(r'[_-]', vid)[0]
+
+            video_rel_path = os.path.join(folder_name, vid)
+            all_videos.append((video_rel_path, folder_name))
+            all_groups.append(group_id)
+
+    gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+    train_idx, eval_idx = next(gss.split(all_videos, groups=all_groups))
+
+    crop_train = [all_videos[i] for i in train_idx]
+    crop_eval = [all_videos[i] for i in eval_idx]
+
+    train_groups = set([all_groups[i] for i in train_idx])
+    eval_groups = set([all_groups[i] for i in eval_idx])
+    intersection = train_groups.intersection(eval_groups)
+
+    print(f"Total Videos: {len(all_videos)}")
+    print(f"Train Videos: {len(crop_train)} | Eval Videos: {len(crop_eval)}")
     
+    if len(intersection) > 0:
+        print(f"[CRITICAL WARNING] ID Leakage Detected! {list(intersection)[:5]}...")
+    else:
+        print("[SUCCESS] Identity-Disjoint Split Completed (인물 기준 완벽 분리됨).")
+
+    return train_list, eval_list

@@ -3,9 +3,15 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 from PIL import Image
-import decord
-
-decord.bridge.set_bridge('torch')
+import json
+try:
+    import decord
+    from decord import cpu
+    decord.bridge.set_bridge('torch')
+except ImportError:
+    decord = None
+    def cpu(id): return None
+    print("Warning: decord not found. Video-based datasets might fail.")
 
 class Celeb_DF(Dataset):
     def __init__(self, root, transform=None, frames_per_video=10):
@@ -48,6 +54,9 @@ class Celeb_DF(Dataset):
         label = sample['label']
 
         try:
+            if decord is None:
+                raise ImportError("decord not found")
+            
             vr = decord.VideoReader(video_path, num_threads=1)
             total_frames = len(vr)
             
@@ -69,13 +78,6 @@ class Celeb_DF(Dataset):
 
 class Celeb_DF_FaceCrop(Dataset):
     def __init__(self, video_list, root_dir, transform=None, frames_per_video=10):
-        """
-        Args:
-            video_list: [(relative_v_path, folder_name), ...] 형태의 리스트
-            root_dir: 'preprocessed_crops' 폴더의 절대 경로
-            transform: 이미지 변환 (Compose)
-            frames_per_video: 비디오당 추출한 프레임 수
-        """
         self.root_dir = root_dir
         self.transform = transform
         self.samples = []
@@ -97,6 +99,51 @@ class Celeb_DF_FaceCrop(Dataset):
 
     def __len__(self):
         return len(self.samples)
+
+    def _get_rotation_matrix(self, landmarks):
+        """ 랜드마크(눈)를 기준으로 회전 매트릭스를 계산하는 함수 """
+        if landmarks is None or len(landmarks) < 2:
+            return None
+        
+        if isinstance(landmarks, list):
+            landmarks = np.array(landmarks)
+        
+        left_eye = landmarks[0]
+        right_eye = landmarks[1]
+        
+        eye_center = ((left_eye[0] + right_eye[0]) / 2, (left_eye[1] + right_eye[1]) / 2)
+        
+        dy = right_eye[1] - left_eye[1]
+        dx = right_eye[0] - left_eye[0]
+        angle = np.degrees(np.arctan2(dy, dx))
+        
+        M = cv2.getRotationMatrix2D(eye_center, angle, 1.0)
+        return M
+
+    def _rotate_bbox(self, bbox, M, img_w, img_h):
+        if bbox is None: return None
+        
+        x1, y1, x2, y2 = bbox
+        corners = np.array([
+            [x1, y1, 1],
+            [x2, y1, 1],
+            [x2, y2, 1],
+            [x1, y2, 1]
+        ])
+        
+        transformed_corners = corners @ M.T 
+        
+        tx1 = np.min(transformed_corners[:, 0])
+        ty1 = np.min(transformed_corners[:, 1])
+        tx2 = np.max(transformed_corners[:, 0])
+        ty2 = np.max(transformed_corners[:, 1])
+        
+        tx1 = max(0, tx1)
+        ty1 = max(0, ty1)
+        tx2 = min(img_w, tx2)
+        ty2 = min(img_h, ty2)
+        
+        return [tx1, ty1, tx2, ty2]
 
     def __getitem__(self, idx):
         img_path, label = self.samples[idx]
@@ -132,7 +179,6 @@ class FaceForensics(Dataset):
                 video_path = os.path.join(self.data_root, rel_path, f"{video_id}.mp4")
                 
                 if not os.path.exists(video_path): 
-                    print(f"Video not found: {video_path}")
                     continue
 
                 with open(meta_path, "r") as f:
@@ -144,14 +190,108 @@ class FaceForensics(Dataset):
                     bbox = frame.get('bbox')
                     landmarks = frame.get('landmarks')
                 
-                    # (str, int, list[float], list[list[float]], int)
-                    self.samples.append((video_path, frame_idx, bbox, landmarks, label))
+                    self.samples.append({
+                        'path': video_path,
+                        'frame_idx': frame_idx,
+                        'bbox': bbox,
+                        'label': label,
+                        'type': 'video'
+                    })
+
+    def _get_rotation_matrix(self, landmarks):
+        """ 랜드마크(눈)를 기준으로 회전 매트릭스를 계산하는 함수 """
+        if landmarks is None or len(landmarks) < 2:
+            return None
+        
+        if isinstance(landmarks, list):
+            landmarks = np.array(landmarks)
+        
+        left_eye = landmarks[0]
+        right_eye = landmarks[1]
+        
+        eye_center = ((left_eye[0] + right_eye[0]) / 2, (left_eye[1] + right_eye[1]) / 2)
+        
+        dy = right_eye[1] - left_eye[1]
+        dx = right_eye[0] - left_eye[0]
+        angle = np.degrees(np.arctan2(dy, dx))
+        
+        M = cv2.getRotationMatrix2D(eye_center, angle, 1.0)
+        return M
+
+    def _rotate_bbox(self, bbox, M, img_w, img_h):
+        if bbox is None: return None
+        
+        x1, y1, x2, y2 = bbox
+        corners = np.array([
+            [x1, y1, 1],
+            [x2, y1, 1],
+            [x2, y2, 1],
+            [x1, y2, 1]
+        ])
+        
+        transformed_corners = corners @ M.T 
+        
+        tx1 = np.min(transformed_corners[:, 0])
+        ty1 = np.min(transformed_corners[:, 1])
+        tx2 = np.max(transformed_corners[:, 0])
+        ty2 = np.max(transformed_corners[:, 1])
+        
+        tx1 = max(0, tx1)
+        ty1 = max(0, ty1)
+        tx2 = min(img_w, tx2)
+        ty2 = min(img_h, ty2)
+        
+        return [tx1, ty1, tx2, ty2]
 
     def __getitem__(self, idx):
-        video_path, frame_idx, bbox, landmarks, label = self.samples[idx]
-        vr = decord.VideoReader(video_path, ctx=cpu(0))
-        frame = vr[frame_idx]
-        image = frame.asnumpy()
+        sample = self.samples[idx]
+        file_path = sample['path']
+        frame_idx = sample['frame_idx']
+        bbox = sample['bbox']
+        label = sample['label']
+        
+        try:
+            if decord is None:
+                raise ImportError("decord not found")
+                
+            vr = decord.VideoReader(file_path, ctx=cpu(0))
+            frame = vr[frame_idx].asnumpy() # [H, W, 3] numpy array
+            h, w, _ = frame.shape
+            
+            if landmarks is not None:
+                M = self._get_rotation_matrix(landmarks)
+                if M is not None:
+                    frame = cv2.warpAffien(frame, M, (w, h), flags=cv2.INTER_CUBIC)
+                    
+                    if bbox is not None:
+                        bbox = self._rotate_bbox(bbox, M, w, h)
+
+            scales = [1.2, 1.5, 2.0]
+            probs = [0.2, 0.6, 0.2]
+            scale = np.random.choice(scales, p=probs)
+
+            if bbox is not None:
+                x1, y1, x2, y2 = map(int, bbox)
+                
+                center_x = (x2 - x1) // 2 + x1
+                center_y = (y2 - y1) // 2 + y1
+                new_center_w = (x2 - x1) * scale
+                new_center_h = (y2 - y1) * scale
+                
+                x1 = int(center_x - new_center_w // 2)
+                y1 = int(center_y - new_center_h // 2)
+                x2 = int(center_x + new_center_w // 2)
+                y2 = int(center_y + new_center_h // 2)
+
+                x1 = max(0, x1); y1 = max(0, y1)
+                x2 = min(w, x2); y2 = min(h, y2)
+                if x2 > x1 and y2 > y1:
+                    frame = frame[y1:y2, x1:x2]
+            
+            image = Image.fromarray(frame)
+        except Exception as e:
+            print(f"Error loading {file_path}: {e}")
+            image = Image.new('RGB', (224, 224), (0, 0, 0))
 
         if self.transform is not None:
             image = self.transform(image)
@@ -159,95 +299,161 @@ class FaceForensics(Dataset):
         return image, label
 
 
-class WildDeepfake(Dataset):
-    def __init__(self, root_dir, split='train', transform=None, max_frames=10):
-        """
-        Args:
-            root_dir: 데이터셋 루트 (예: ./WildDeepfake)
-            split: 'train' 또는 'test' (real_train/fake_train 폴더 결정)
-            transform: 전처리
-            max_frames: 시퀀스(폴더) 당 사용할 최대 프레임 수 (None이면 전체 다 사용)
-                        * FaceForensics와 균형을 맞추려면 10~20 정도 추천
-        """
+class DFDC(Dataset):
+    def __init__(self, root_dir, transform=None, frames_per_video=10):
         self.transform = transform
+        self.frames_per_video = frames_per_video
         self.samples = []
         
-        target_folders = {
-            f'real_{split}': 0,
-            f'fake_{split}': 1
-        }
+        self.meta_root = os.path.join(root_dir, "Metadata", "DFDC")
+        
+        print(f"Loading DFDC from {self.meta_root}...")
+        
+        if not os.path.exists(self.meta_root):
+             print(f"Warning: {self.meta_root} not found.")
 
-        print(f"Loading WildDeepfake ({split}) with max_frames={max_frames}...")
-
-        for folder_name, label in target_folders.items():
-            base_path = os.path.join(root_dir, folder_name)
-            if not os.path.exists(base_path):
-                print(f"Warning: {base_path} not found.")
-                continue
-            
-            for root, dirs, files in os.walk(base_path):
-                image_files = [f for f in files if f.lower().endswith('.png')]
+        for root, dirs, files in os.walk(self.meta_root):
+            for file in files:
+                if not file.endswith('.json'): continue
                 
-                if len(image_files) == 0:
+                meta_path = os.path.join(root, file)
+                try:
+                    with open(meta_path, 'r') as f:
+                        meta = json.load(f)
+                except:
                     continue
+
+                label = 0
+                if 'fake' in root.lower() or ('fake' in meta.get('file_path').lower()):
+                    label = 1
                 
-                image_files.sort()
+                file_type = meta.get('type', 'image')
+                file_path_rel = meta.get('file_path')
                 
-                if max_frames is not None and len(image_files) > max_frames:
-                    indices = np.linspace(0, len(image_files) - 1, max_frames, dtype=int)
-                    selected_files = [image_files[i] for i in indices]
+                if file_path_rel:
+                     if file_path_rel.startswith('./'):
+                         pass
                 else:
-                    selected_files = image_files
-                
-                # metadata 처리 부분
-                meta_root = root.replace("Dataset", "Metadata")
-                for file in selected_files:
-                    img_path = os.path.join(root, file)
-                    json_filename = os.path.splitext(file)[0] + ".json"
-                    meta_path = os.path.join(meta_root, json_filename)
+                    continue
 
-                    bbox = None
-                    landmarks = None
+                for item in meta.get('data', []):
+                    self.samples.append({
+                        'path': file_path_rel,
+                        'type': file_type,
+                        'bbox': item.get('bbox'),
+                        'label': label,
+                        'frame_idx': item.get('frame_idx', 0)
+                    })
 
-                    if os.path.exists(json_path):
-                        try:
-                            with open(meta_path, "r") as f:
-                                meta_data = json.load(f)
-
-                            bbox = meta_data.get("bbox")    
-                            landmarks = meta_data.get("landmarks")
-                            
-
-                for file in selected_files:
-                    self.samples.append((os.path.join(root, file), label))
-
-        print(f"Loaded {len(self.samples)} samples.")
+        print(f"DFDC: Loaded {len(self.samples)} samples.")
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        img_path, label = self.samples[idx]
+        sample = self.samples[idx]
+        file_path = sample['path']
+        file_type = sample['type']
+        label = sample['label']
+        bbox = sample['bbox']
         
-        # 이미지 로드 (OpenCV)
-        # WildDeepfake 이미지는 간혹 깨진 파일이 있을 수 있어 예외처리 권장
+        image = None
+        
         try:
-            image = cv2.imread(img_path)
-            if image is None:
-                raise IOError("Image load failed")
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        except Exception as e:
-            # 학습 중 멈추지 않도록 에러 출력 후 대체 데이터(0번 인덱스 등) 리턴하거나 
-            # 여기서는 에러를 띄우고 DataLoader에서 collate_fn으로 처리하는 방법 등이 있음.
-            print(f"Error loading {img_path}: {e}")
-            # 임시 방편: 에러 시 0번 데이터 리턴 (혹은 랜덤)
-            return self.__getitem__(0)
+            if file_type == 'image':
+                image = Image.open(file_path).convert('RGB')
+                if bbox is not None:
+                    x1, y1, x2, y2 = map(int, bbox)
+                    if x2 > x1 and y2 > y1:
+                        image = image.crop((x1, y1, x2, y2))
+                
+            elif file_type == 'video':
+                if decord is None:
+                    raise ImportError("decord not found")
+                vr = decord.VideoReader(file_path, num_threads=1)
+                frame_idx = sample['frame_idx']
+                if frame_idx >= len(vr): frame_idx = len(vr) - 1
+                frame = vr[frame_idx].asnumpy()
+                
+                if bbox is not None:
+                    x1, y1, x2, y2 = map(int, bbox)
+                    h, w, _ = frame.shape
+                    x1 = max(0, x1); y1 = max(0, y1)
+                    x2 = min(w, x2); y2 = min(h, y2)
+                    if x2 > x1 and y2 > y1:
+                        frame = frame[y1:y2, x1:x2]
+                image = Image.fromarray(frame)
 
-        # Transform 적용
+        except Exception:
+            image = Image.new('RGB', (224, 224), (0, 0, 0))
+
         if self.transform:
-            # Albumentations:
-            image = self.transform(image=image)['image']
-            # Torchvision:
-            # image = self.transform(image)
+            image = self.transform(image)
 
+        return image, label
+
+
+class WildDeepfake(Dataset):
+    def __init__(self, root_dir, transform=None, frames_per_video=None):
+        self.transform = transform
+        self.samples = []
+        
+        base_dataset_path = os.path.join(root_dir, "Dataset", "WildDeepfake", "deepfake_in_the_wild")
+        base_metadata_path = os.path.join(root_dir, "Metadata", "WildDeepfake", "deepfake_in_the_wild")
+
+        print(f"Loading WildDeepfake from {base_dataset_path}...")
+        
+        for root, dirs, files in os.walk(base_dataset_path):
+            for file in files:
+                if not file.lower().endswith(('.png', '.jpg', '.jpeg')): continue
+                
+                img_path = os.path.join(root, file)
+                
+                label = 0
+                if 'fake' in root.lower():
+                    label = 1
+                
+                rel_path = os.path.relpath(root, base_dataset_path)
+                meta_dir = os.path.join(base_metadata_path, rel_path)
+                json_name = os.path.splitext(file)[0] + ".json"
+                meta_path = os.path.join(meta_dir, json_name)
+                
+                bbox = None
+                if os.path.exists(meta_path):
+                    try:
+                        with open(meta_path, 'r') as f:
+                            meta = json.load(f)
+                        bbox = meta.get('bbox')
+                    except:
+                        pass
+                
+                self.samples.append({
+                    'path': img_path,
+                    'bbox': bbox,
+                    'label': label
+                })
+
+        print(f"WildDeepfake: Loaded {len(self.samples)} samples.")
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        sample = self.samples[idx]
+        img_path = sample['path']
+        label = sample['label']
+        bbox = sample['bbox']
+        
+        try:
+            image = Image.open(img_path).convert('RGB')
+            if bbox is not None:
+                x1, y1, x2, y2 = map(int, bbox)
+                if x2 > x1 and y2 > y1:
+                    image = image.crop((x1, y1, x2, y2))
+        except Exception:
+            image = Image.new('RGB', (224, 224), (0, 0, 0))
+            
+        if self.transform:
+            image = self.transform(image)
+            
         return image, label

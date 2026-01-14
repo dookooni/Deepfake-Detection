@@ -159,3 +159,113 @@ def split_celeb_df(root_dir, test_ratio=0.2):
         print("[SUCCESS] Identity-Disjoint Split Completed (인물 기준 완벽 분리됨).")
 
     return crop_train, crop_eval
+
+def split_dfdc(root_dir, val_ratio=0.2, seed=42):
+    data_list = []
+    groups = []
+    
+    for label_name, label_idx in [('real', 0), ('fake', 1)]:
+        folder_path = os.path.join(root_dir, label_name)
+        if not os.path.exists(folder_path):
+            print(f"[Warning] {folder_path} not found.")
+            continue
+            
+        files = glob.glob(os.path.join(folder_path, "*.png")) + glob.glob(os.path.join(folder_path, "*.jpg"))
+        
+        for file_path in files:
+            file_name = os.path.basename(file_path)
+            
+            name_no_ext = os.path.splitext(file_name)[0]
+            if '_' in name_no_ext:
+                group_id = "_".join(name_no_ext.split('_')[:-1])
+            else:
+                group_id = name_no_ext
+            
+            data_list.append({
+                'path': file_path,
+                'label': label_idx,
+                'group': group_id
+            })
+            groups.append(group_id)
+
+    if len(data_list) == 0:
+        print("DFDC 데이터를 찾을 수 없습니다.")
+        return [], []
+
+    gss = GroupShuffleSplit(n_splits=1, test_size=val_ratio, random_state=seed)
+    train_idx, val_idx = next(gss.split(data_list, groups=groups))
+    
+    train_data = [data_list[i] for i in train_idx]
+    val_data = [data_list[i] for i in val_idx]
+    
+    train_groups = set([d['group'] for d in train_data])
+    val_groups = set([d['group'] for d in val_data])
+    intersection = train_groups.intersection(val_groups)
+    
+    print(f"=== DFDC Split Result ===")
+    print(f"Total: {len(data_list)} | Train: {len(train_data)} | Val: {len(val_val_data)}")
+    if intersection:
+        print(f"[CRITICAL] Leakage Detected! {list(intersection)[:3]}...")
+    else:
+        print("[SUCCESS] 완벽하게 비디오 단위로 분리되었습니다.")
+        
+    return train_data, val_data
+
+
+def split_wilddeepfake(root_dir, val_ratio=0.2, seed=42):
+    """
+    WildDeepfake 데이터셋 분할 (폴더 기준 그룹화)
+    구조: root_dir/{fake_train, fake_test, ...}/1st_folder/2nd_folder/image.png
+    """
+    data_list = []
+    groups = []
+    
+    sub_folders = ['fake_train', 'fake_test', 'real_train', 'real_test']
+    
+    for sub in sub_folders:
+        base_path = os.path.join(root_dir, sub)
+        if not os.path.exists(base_path):
+            continue
+            
+        label = 0 if 'real' in sub else 1
+        
+        for root, dirs, files in os.walk(base_path):
+            images = [f for f in files if f.lower().endswith(('.png'))]
+            if not images:
+                continue
+            
+            rel_path = os.path.relpath(root, root_dir)
+            group_id = rel_path 
+            
+            for img_name in images:
+                full_path = os.path.join(root, img_name)
+                data_list.append({
+                    'path': full_path,
+                    'label': label,
+                    'group': group_id
+                })
+                groups.append(group_id)
+
+    if len(data_list) == 0:
+        print("WildDeepfake 데이터를 찾을 수 없습니다.")
+        return [], []
+
+    gss = GroupShuffleSplit(n_splits=1, test_size=val_ratio, random_state=seed)
+    train_idx, val_idx = next(gss.split(data_list, groups=groups))
+    
+    train_data = [data_list[i] for i in train_idx]
+    val_data = [data_list[i] for i in val_idx]
+
+    # 3. 검증
+    train_groups = set([d['group'] for d in train_data])
+    val_groups = set([d['group'] for d in val_data])
+    intersection = train_groups.intersection(val_groups)
+
+    print(f"=== WildDeepfake Split Result ===")
+    print(f"Total: {len(data_list)} | Train: {len(train_data)} | Val: {len(val_data)}")
+    if intersection:
+        print(f"[CRITICAL] Leakage Detected! {list(intersection)[:3]}...")
+    else:
+        print("[SUCCESS] 폴더(비디오) 단위로 완벽하게 분리되었습니다.")
+
+    return train_data, val_data    

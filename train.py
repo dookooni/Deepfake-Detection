@@ -12,8 +12,8 @@ from accelerate.utils import set_seed
 from src.models import DeepfakeClassifierDINOv3
 from tqdm.auto import tqdm
 
-from src.dataset import Celeb_DF, Celeb_DF_FaceCrop
-from src.utils import RandomJPEGCompression, get_llrd_params, split_faceforensics, split_celeb_df
+from src.dataset import Celeb_DF, FaceForensics, DFDC, WildDeepfake
+from src.utils import RandomJPEGCompression, get_llrd_params, split_faceforensics, split_celeb_df, split_dfdc, split_wilddeepfake
 
 import numpy as np
 from sklearn.model_selection import train_test_split
@@ -114,13 +114,29 @@ def main():
     if accelerator.is_main_process:
         accelerator.print(f"Loading data from: {train_data_path}")
 
-    # Celeb-DF Split
+    # Datasets
+    # =========================================================
+    # Celeb-DF Datasets
     crop_root = os.path.join(train_data_path, "Dataset", "celeb_df")
     crop_train, crop_eval = split_celeb_df(train_data_path)
+    crop_train_dataset = Celeb_DF(crop_train, root_dir=crop_root, transform=train_transform)
+    crop_eval_dataset = Celeb_DF(crop_eval, root_dir=crop_root, transform=eval_transform)
 
-    # Celeb-DF Datasets
-    crop_train_dataset = Celeb_DF_FaceCrop(crop_train, root_dir=crop_root, transform=train_transform, frames_per_video=frames_per_video)
-    crop_eval_dataset = Celeb_DF_FaceCrop(crop_eval, root_dir=crop_root, transform=eval_transform, frames_per_video=frames_per_video)
+    # FaceForensics Split
+    face_train, face_eval = split_faceforensics(train_data_path)
+    face_train_dataset = FaceForensics(root_dir=train_data_path, video_ids=face_train, transform=train_transform)
+    face_eval_dataset = FaceForensics(root_dir=train_data_path, video_ids=face_eval, transform=eval_transform)
+
+    # DFDC Split
+    dfdc_train, dfdc_eval = split_dfdc(train_data_path)
+    dfdc_train_dataset = DFDC(root_dir=train_data_path, transform=train_transform)
+    dfdc_eval_dataset = DFDC(root_dir=train_data_path, transform=eval_transform)
+
+    # WildDeepfake Split
+    wild_train, wild_eval = split_wilddeepfake(train_data_path)
+    wild_train_dataset = WildDeepfake(root_dir=train_data_path, transform=train_transform)
+    wild_eval_dataset = WildDeepfake(root_dir=train_data_path, transform=eval_transform)
+    # =========================================================
 
     # 샘플 수 확인
     train_labels = [label for _, label in crop_train_dataset.samples]

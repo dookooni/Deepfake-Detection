@@ -14,7 +14,7 @@ except ImportError:
     def cpu(id): return None
     print("Warning: decord not found. Video-based datasets might fail.")
 
-class Celeb_DF(Dataset):
+class Celeb_DF_(Dataset):
     def __init__(self, root, transform=None, frames_per_video=10):
         self.root = root
         self.transform = transform
@@ -77,8 +77,8 @@ class Celeb_DF(Dataset):
         return image, label
 
 
-class Celeb_DF_FaceCrop(Dataset):
-    def __init__(self, video_list, root_dir, transform=None, frames_per_video=10):
+class Celeb_DF(Dataset):
+    def __init__(self, video_list, root_dir, transform=None):
         self.root_dir = root_dir
         self.transform = transform
         self.samples = []
@@ -97,6 +97,7 @@ class Celeb_DF_FaceCrop(Dataset):
             fol = rel_v_path.split('/')[1]
             fol = os.path.splitext(fol)[0]
             meta_path = os.path.join(self.root_dir, rel_v_path.split('/')[0], fol, fol + '.json')
+            meta_path = meta_path.replace("Dataset", "Metadata")
             
             with open(meta_path, 'r') as f:
                 meta = json.load(f)
@@ -177,7 +178,7 @@ class Celeb_DF_FaceCrop(Dataset):
                 raise ImportError("decord not found")
                 
             vr = decord.VideoReader(file_path, ctx=cpu(0))
-            frame = vr[frame_idx].asnumpy() # [H, W, 3] numpy array
+            frame = vr[frame_idx].detach().cpu().numpy() # [H, W, 3] numpy array
             h, w, _ = frame.shape
             
             if landmarks is not None:
@@ -368,9 +369,8 @@ class FaceForensics(Dataset):
 
 
 class DFDC(Dataset):
-    def __init__(self, root_dir, transform=None, frames_per_video=10):
+    def __init__(self, root_dir, transform=None):
         self.transform = transform
-        self.frames_per_video = frames_per_video
         self.samples = []
         
         self.meta_root = os.path.join(root_dir, "Metadata", "DFDC")
@@ -485,7 +485,7 @@ class DFDC(Dataset):
 
 
 class WildDeepfake(Dataset):
-    def __init__(self, root_dir, transform=None, frames_per_video=None):
+    def __init__(self, root_dir, transform=None):
         self.transform = transform
         self.samples = []
         

@@ -118,24 +118,24 @@ def main():
     # =========================================================
     # Celeb-DF Datasets
     crop_root = os.path.join(train_data_path, "Dataset", "celeb_df")
-    crop_train, crop_eval = split_celeb_df(train_data_path)
+    crop_train, crop_eval = split_celeb_df(train_data_path, seed=42)
     crop_train_dataset = Celeb_DF(crop_train, root_dir=crop_root, transform=train_transform)
     crop_eval_dataset = Celeb_DF(crop_eval, root_dir=crop_root, transform=eval_transform)
 
     # FaceForensics Split
-    face_train, face_eval = split_faceforensics(train_data_path)
+    face_train, face_eval = split_faceforensics(train_data_path, seed=42)
     face_train_dataset = FaceForensics(root_dir=train_data_path, video_ids=face_train, transform=train_transform)
     face_eval_dataset = FaceForensics(root_dir=train_data_path, video_ids=face_eval, transform=eval_transform)
 
     # DFDC Split
-    dfdc_train, dfdc_eval = split_dfdc(train_data_path)
-    dfdc_train_dataset = DFDC(root_dir=train_data_path, transform=train_transform)
-    dfdc_eval_dataset = DFDC(root_dir=train_data_path, transform=eval_transform)
+    dfdc_train, dfdc_eval = split_dfdc(train_data_path, seed=42)
+    dfdc_train_dataset = DFDC(root_dir=train_data_path, video_ids=dfdc_train, transform=train_transform)
+    dfdc_eval_dataset = DFDC(root_dir=train_data_path, video_ids=dfdc_eval, transform=eval_transform)
 
     # WildDeepfake Split
-    wild_train, wild_eval = split_wilddeepfake(train_data_path)
-    wild_train_dataset = WildDeepfake(root_dir=train_data_path, transform=train_transform)
-    wild_eval_dataset = WildDeepfake(root_dir=train_data_path, transform=eval_transform)
+    wild_train, wild_eval = split_wilddeepfake(train_data_path, seed=42)
+    wild_train_dataset = WildDeepfake(root_dir=train_data_path, video_ids=wild_train, transform=train_transform)
+    wild_eval_dataset = WildDeepfake(root_dir=train_data_path, video_ids=wild_eval, transform=eval_transform)
     # =========================================================
 
     # 샘플 수 확인

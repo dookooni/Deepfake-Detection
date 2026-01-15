@@ -7,6 +7,7 @@ from insightface.app import FaceAnalysis
 import decord
 import os
 import re
+import glob
 
 class RandomJPEGCompression:
     def __init__(self, quality_range=(40, 90), p=0.5):
@@ -101,7 +102,7 @@ def get_llrd_params(model, base_lr, decay_rate=0.75):
 
     return param_groups
 
-def split_faceforensics(root_dir, test_ratio=0.2):
+def split_faceforensics(root_dir, test_ratio=0.2, seed=42):
     video_ids = set()
 
     data_root = os.path.join(root_dir, 'Dataset', 'FaceForensics++_C23')
@@ -111,11 +112,11 @@ def split_faceforensics(root_dir, test_ratio=0.2):
                 video_id = os.path.splitext(file)[0]
                 video_ids.add(video_id)
 
-    train_ids, val_ids = train_test_split(sorted(list(video_ids)), test_size=test_ratio, random_state=42)
+    train_ids, val_ids = train_test_split(sorted(list(video_ids)), test_size=test_ratio, random_state=seed)
 
     return train_ids, val_ids
 
-def split_celeb_df(root_dir, test_ratio=0.2):
+def split_celeb_df(root_dir, test_ratio=0.2, seed=42):
     crop_root = os.path.join(root_dir, "Dataset", "celeb_df")
 
     all_videos = []
@@ -140,7 +141,7 @@ def split_celeb_df(root_dir, test_ratio=0.2):
             all_videos.append((video_rel_path, folder_name))
             all_groups.append(group_id)
 
-    gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+    gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=seed)
     train_idx, eval_idx = next(gss.split(all_videos, groups=all_groups))
 
     crop_train = [all_videos[i] for i in train_idx]
@@ -163,9 +164,10 @@ def split_celeb_df(root_dir, test_ratio=0.2):
 def split_dfdc(root_dir, val_ratio=0.2, seed=42):
     data_list = []
     groups = []
-    
+    data_path = os.path.join(root_dir, "Dataset", "DFDC/Dataset")
+
     for label_name, label_idx in [('real', 0), ('fake', 1)]:
-        folder_path = os.path.join(root_dir, label_name)
+        folder_path = os.path.join(data_path, label_name)
         if not os.path.exists(folder_path):
             print(f"[Warning] {folder_path} not found.")
             continue
@@ -203,7 +205,7 @@ def split_dfdc(root_dir, val_ratio=0.2, seed=42):
     intersection = train_groups.intersection(val_groups)
     
     print(f"=== DFDC Split Result ===")
-    print(f"Total: {len(data_list)} | Train: {len(train_data)} | Val: {len(val_val_data)}")
+    print(f"Total: {len(data_list)} | Train: {len(train_data)} | Val: {len(val_data)}")
     if intersection:
         print(f"[CRITICAL] Leakage Detected! {list(intersection)[:3]}...")
     else:
@@ -219,11 +221,12 @@ def split_wilddeepfake(root_dir, val_ratio=0.2, seed=42):
     """
     data_list = []
     groups = []
+    data_path = os.path.join(root_dir, "Dataset", "WildDeepfake/deepfake_in_the_wild")
     
     sub_folders = ['fake_train', 'fake_test', 'real_train', 'real_test']
     
     for sub in sub_folders:
-        base_path = os.path.join(root_dir, sub)
+        base_path = os.path.join(data_path, sub)
         if not os.path.exists(base_path):
             continue
             
@@ -256,7 +259,6 @@ def split_wilddeepfake(root_dir, val_ratio=0.2, seed=42):
     train_data = [data_list[i] for i in train_idx]
     val_data = [data_list[i] for i in val_idx]
 
-    # 3. 검증
     train_groups = set([d['group'] for d in train_data])
     val_groups = set([d['group'] for d in val_data])
     intersection = train_groups.intersection(val_groups)

@@ -5,6 +5,7 @@ from torch.utils.data import Dataset
 from PIL import Image
 import json
 import cv2
+from collections import Counter
 try:
     import decord
     from decord import cpu
@@ -119,6 +120,10 @@ class Celeb_DF(Dataset):
 
     def __len__(self):
         return len(self.samples)
+
+    def _count_labels(self):
+        label_count = Counter([sample['label'] for sample in self.samples])
+        return label_count
 
     def _get_rotation_matrix(self, landmarks):
         """ 랜드마크(눈)를 기준으로 회전 매트릭스를 계산하는 함수 """
@@ -266,6 +271,13 @@ class FaceForensics(Dataset):
                         'type': 'video'
                     })
 
+    def __len__(self):
+        return len(self.samples)
+
+    def _count_labels(self):
+        label_count = Counter([sample['label'] for sample in self.samples])
+        return label_count
+
     def _get_rotation_matrix(self, landmarks):
         """ 랜드마크(눈)를 기준으로 회전 매트릭스를 계산하는 함수 """
         if landmarks is None or len(landmarks) < 2:
@@ -324,7 +336,7 @@ class FaceForensics(Dataset):
                 raise ImportError("decord not found")
                 
             vr = decord.VideoReader(file_path, ctx=cpu(0))
-            frame = vr[frame_idx].asnumpy() # [H, W, 3] numpy array
+            frame = vr[frame_idx].detach().cpu().numpy() # [H, W, 3] numpy array
             h, w, _ = frame.shape
             
             if landmarks is not None:
@@ -369,11 +381,16 @@ class FaceForensics(Dataset):
 
 
 class DFDC(Dataset):
-    def __init__(self, root_dir, transform=None):
+    def __init__(self, root_dir, video_ids, transform=None):
         self.transform = transform
+        self.video_ids = video_ids
         self.samples = []
         
         self.meta_root = os.path.join(root_dir, "Metadata", "DFDC")
+        if video_ids is not None:
+            self.allowed_ids = {os.path.splitext(item['path'].split('/')[-1])[0] for item in video_ids}
+        else:
+            self.allowed_ids = None
         
         print(f"Loading DFDC from {self.meta_root}...")
         
@@ -390,6 +407,13 @@ class DFDC(Dataset):
                         meta = json.load(f)
                 except:
                     continue
+
+                file_path_rel = meta.get('file_path')
+                if not file_path_rel: continue
+                ids = os.path.splitext(file_path_rel.split('/')[-1])[0]
+                if self.allowed_ids is not None:
+                    if ids not in self.allowed_ids:
+                        continue
 
                 label = 0
                 if 'fake' in root.lower() or ('fake' in meta.get('file_path', '').lower()):
@@ -415,6 +439,10 @@ class DFDC(Dataset):
 
     def __len__(self):
         return len(self.samples)
+
+    def _count_labels(self):
+        label_count = Counter([sample['label'] for sample in self.samples])
+        return label_count
 
     def _get_rotation_matrix(self, landmarks):
         """ 랜드마크(눈)를 기준으로 회전 매트릭스를 계산하는 함수 """
@@ -485,7 +513,7 @@ class DFDC(Dataset):
 
 
 class WildDeepfake(Dataset):
-    def __init__(self, root_dir, transform=None):
+    def __init__(self, root_dir, video_ids, transform=None):
         self.transform = transform
         self.samples = []
         
@@ -494,12 +522,21 @@ class WildDeepfake(Dataset):
 
         print(f"Loading WildDeepfake from {base_dataset_path}...")
         
+        if video_ids is not None:
+            self.allowed_paths = {os.path.abspath(item['path']) for item in video_ids}
+        else:
+            self.allowed_paths = None
+        
         for root, dirs, files in os.walk(base_dataset_path):
             for file in files:
                 if not file.lower().endswith(('.png', '.jpg', '.jpeg')): continue
                 
                 img_path = os.path.join(root, file)
                 
+                if self.allowed_paths is not None:
+                    if os.path.abspath(img_path) not in self.allowed_paths:
+                        continue
+
                 label = 0
                 if 'fake' in root.lower():
                     label = 1
@@ -511,12 +548,13 @@ class WildDeepfake(Dataset):
                 
                 bbox = None
                 landmarks = None
+                
                 if os.path.exists(meta_path):
                     try:
                         with open(meta_path, 'r') as f:
                             meta = json.load(f)
-                        bbox = meta.get('bbox')
-                        landmarks = meta.get('landmarks')
+                            bbox = meta.get('bbox')
+                            landmarks = meta.get('landmarks')
                     except:
                         pass
                 
@@ -531,6 +569,10 @@ class WildDeepfake(Dataset):
 
     def __len__(self):
         return len(self.samples)
+
+    def _count_labels(self):
+        label_count = Counter([sample['label'] for sample in self.samples])
+        return label_count
 
     def _get_rotation_matrix(self, landmarks):
         """ 랜드마크(눈)를 기준으로 회전 매트릭스를 계산하는 함수 """
@@ -562,7 +604,7 @@ class WildDeepfake(Dataset):
         try:
             frame = cv2.imread(img_path)
             if frame is None:
-                 raise FileNotFoundError
+                 raise FileNotFoundError(f"Image not found: {img_path}")
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             h, w, _ = frame.shape
 

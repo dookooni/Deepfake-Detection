@@ -537,9 +537,9 @@ class WildDeepfake(Dataset):
                     if os.path.abspath(img_path) not in self.allowed_paths:
                         continue
 
-                label = 0
-                if 'fake' in root.lower():
-                    label = 1
+                label = 1
+                if 'real' in root.lower():
+                    label = 0
                 
                 rel_path = os.path.relpath(root, base_dataset_path)
                 meta_dir = os.path.join(base_metadata_path, rel_path)

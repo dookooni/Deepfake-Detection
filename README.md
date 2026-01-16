@@ -46,6 +46,7 @@
 
 ---
 
+
 ## 📂 Project Structure
 ```text
 ├── tools/
@@ -53,10 +54,12 @@
 ├── data/
 │   ├── dataset.py             # JSON 기반 On-the-fly 크롭 및 1:1 밸런싱 데이터셋
 │   └── transforms.py          # JPEG Compression 등 딥페이크 특화 Augmentation
-├── models/
-│   └── dinov3_detector.py     # DINOv3 기반 Binary Classifier
-├── configs/
-│   └── base_config.yaml       # 하이퍼파라미터 및 경로 설정
+├── src/
+│   └── dataset.py             # Celeb_DF / FaceForensics++ C23 / DFDC / WildDeepfake
+│   └── model.py               # DINOv3 ViT-H / ConvNeXtV2-Base
+│   └── utils.py
+├── config/
+│   └── config.yaml       # 하이퍼파라미터 및 경로 설정
 ├── train.py                   # Accelerator 기반 분산 학습 메인 스크립트
 └── test.py                    # 벤치마크 데이터셋 성능 평가 스크립트
 ```
@@ -78,7 +81,7 @@ python data_preproces.py
 ### 3. 학습 시작
 accelerate 설정을 마친 후 멀티 GPU 환경에서 학습을 최적화한다.
 ```bash
-accelerate launch train.py
+accelerate launch --num_processes 3 --mixed_precision bf16train.py --config config/config.yaml 2> /dev/null
 ```
 
 ---

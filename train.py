@@ -1,28 +1,35 @@
 import os
+
+os.environ["DECORD_LOG_LEVEL"] = "FATAL"
+import sys
 import re
 import yaml
 import argparse
+from collections import Counter
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader, WeightedRandomSampler, ConcatDataset
 from torchvision import transforms
 from accelerate import Accelerator, DistributedDataParallelKwargs
 from accelerate.utils import set_seed
-from src.models import DeepfakeClassifierDINOv3
+from src.models import DeepfakeClassifierDINOv3, DeepfakeClassifierConvNeXtV2
 from tqdm.auto import tqdm
 
 from src.dataset import Celeb_DF, FaceForensics, DFDC, WildDeepfake
-from src.utils import RandomJPEGCompression, get_llrd_params, split_faceforensics, split_celeb_df, split_dfdc, split_wilddeepfake
+from src.utils import RandomJPEGCompression, get_llrd_params_dinov3, get_llrd_params_convnext, split_faceforensics, split_celeb_df, split_dfdc, split_wilddeepfake
 
 import numpy as np
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import roc_auc_score
 
-def train_one_epoch(epoch, model, dataloader, optimizer, criterion, accelerator):
+
+
+def train_one_epoch(epoch, total_epochs, model, dataloader, optimizer, criterion, accelerator):
     model.train()
     epoch_loss = 0.0
 
-    progress_bar = tqdm(dataloader, disable=not accelerator.is_local_main_process, desc=f"Epoch {epoch+1}/{epochs}")
+    progress_bar = tqdm(dataloader, disable=not accelerator.is_local_main_process, desc=f"Epoch {epoch}/{total_epochs}", file=sys.stdout)
         
     for batch_idx, (images, labels) in enumerate(progress_bar):
         optimizer.zero_grad()
@@ -69,7 +76,11 @@ def main():
         config = yaml.safe_load(f)
 
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
-    accelerator = Accelerator(log_with="all", project_dir="logs", kwargs_handlers=[ddp_kwargs])
+    accelerator = Accelerator(log_with="all", 
+                            project_dir="logs", 
+                            kwargs_handlers=[ddp_kwargs], 
+                            mixed_precision="bf16"
+                            )
 
     set_seed(42)
     if accelerator.is_main_process:
@@ -138,26 +149,63 @@ def main():
     wild_eval_dataset = WildDeepfake(root_dir=train_data_path, video_ids=wild_eval, transform=eval_transform)
     # =========================================================
 
-    # 샘플 수 확인
-    train_labels = [label for _, label in crop_train_dataset.samples]
-    class_counts = np.bincount(train_labels)
-    accelerator.print(f"Class Counts: {class_counts}")
+    train_datasets = [
+        crop_train_dataset,
+        face_train_dataset,
+        dfdc_train_dataset,
+        wild_train_dataset
+    ]
+
+    eval_datasets = [
+        crop_eval_dataset,
+        face_eval_dataset,
+        dfdc_eval_dataset,
+        wild_eval_dataset
+    ]
+
+    full_train_dataset = ConcatDataset(train_datasets)
+    full_eval_dataset = ConcatDataset(eval_datasets)
+
+    accelerator.print(f"Total Train Samples: {len(full_train_dataset)}")
+    accelerator.print(f"Total Eval Samples: {len(full_eval_dataset)}")
+
+    accelerator.print("Calculating global class weights...")
+
+    total_real = 0
+    total_fake = 0
+
+    for ds in train_datasets:
+        labels = [s['label'] for s in ds.samples]
+        counts = Counter(labels)
+        total_real += counts.get(0, 0)
+        total_fake += counts.get(1, 0)
+
+    accelerator.print(f"Global Counts -> Real(0): {total_real}, Fake(1): {total_fake}")
 
     loss_weights = None
-    if len(class_counts) > 0:
-        loss_weights = torch.tensor([sum(class_counts) / c for c in class_counts], dtype=torch.float32)
-        loss_weights = loss_weights / loss_weights.sum()
-        accelerator.print(f"Loss Weights: {loss_weights}")
 
+    if total_real > 0 and total_fake > 0:
+        total_count = total_real + total_fake
+        
+        w0 = total_count / (2 * total_real) # Real 가중치
+        w1 = total_count / (2 * total_fake) # Fake 가중치
+        
+        loss_weights = torch.tensor([w0, w1], dtype=torch.float32).to(accelerator.device)
+        
+        accelerator.print(f"Calculated Loss Weights: {loss_weights}")
+    else:
+        accelerator.print("[Warning] 데이터가 없거나 한쪽 클래스가 0개입니다. 가중치를 적용하지 않습니다.")
+
+    # DataLoader
     crop_train_loader = DataLoader(
-        crop_train_dataset, 
+        full_train_dataset, 
         batch_size=batch_size, 
         shuffle=True,
         num_workers=train_cfg.get('num_workers', 8), 
         pin_memory=True
     )
     crop_eval_loader = DataLoader(
-        crop_eval_dataset, 
+        full_eval_dataset, 
         batch_size=batch_size, 
         shuffle=False, 
         num_workers=train_cfg.get('num_workers', 8), 
@@ -165,18 +213,24 @@ def main():
     )
 
     # Model
-    model = DeepfakeClassifierDINOv3(
+    # model = DeepfakeClassifierDINOv3(
+    #     model_name=model_cfg['name'], 
+    #     num_classes=model_cfg['num_classes'], 
+    #     checkpoint_path=model_cfg.get('checkpoint_path', ''),
+    #     pretrained=False
+    # )
+    model = DeepfakeClassifierConvNeXtV2(
         model_name=model_cfg['name'], 
         num_classes=model_cfg['num_classes'], 
         checkpoint_path=model_cfg.get('checkpoint_path', ''),
-        pretrained=False
+        pretrained=True
     )
     
-
     # Optimizer
     for name, param in model.named_parameters():
         param.requires_grad = True
-    params = get_llrd_params(model, lr)
+    # params = get_llrd_params(model, lr)
+    params = get_llrd_params_convnext(model, lr)
     optimizer = optim.AdamW(params)
 
     # Scheduler & Loss
@@ -201,7 +255,7 @@ def main():
             for name, param in model.named_parameters():
                 param.requires_grad = True
 
-        train_loss = train_one_epoch(epoch, model, crop_train_loader, optimizer, criterion, accelerator)
+        train_loss = train_one_epoch(epoch, epochs, model, crop_train_loader, optimizer, criterion, accelerator)
         scheduler.step()
         
         val_loss, val_labels, val_probs = validate(model, crop_eval_loader, criterion, accelerator)

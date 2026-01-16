@@ -65,7 +65,7 @@ class UniversalDetector:
             "score": float(face.det_score)
         }
 
-def get_llrd_params(model, base_lr, decay_rate=0.75):
+def get_llrd_params_dinov3(model, base_lr, decay_rate=0.75):
     n_blocks = len(model.backbone.blocks)
     param_groups = []
     
@@ -98,6 +98,50 @@ def get_llrd_params(model, base_lr, decay_rate=0.75):
         param_groups.append({
             "params": rest_params, 
             "lr": base_lr * (decay_rate ** (n_blocks + 1))
+        })
+
+    return param_groups
+
+def get_llrd_params_convnext(model, base_lr, decay_rate=0.75):
+    """
+    ConvNeXt V2 구조에 맞춘 Layer-wise Learning Rate Decay
+    Structure: stem -> stages.0 -> stages.1 -> stages.2 -> stages.3 -> head
+    """
+    n_stages = 4 
+    param_groups = []
+    seen_names = set()
+
+    head_params = []
+    for name, param in model.named_parameters():
+        if ("head" in name or "backbone.head" in name or "backbone.norm.weight" in name or "backbone.norm.bias" in name) and name not in seen_names:
+            head_params.append(param)
+            seen_names.add(name)
+    
+    if head_params:
+        param_groups.append({"params": head_params, "lr": base_lr})
+
+    for i in range(n_stages - 1, -1, -1):
+        lr = base_lr * (decay_rate ** (n_stages - 1 - i))
+        
+        stage_params = []
+        for name, param in model.named_parameters():
+            if f"stages.{i}." in name and name not in seen_names:
+                stage_params.append(param)
+                seen_names.add(name)
+        
+        if stage_params:
+            param_groups.append({"params": stage_params, "lr": lr})
+    
+    rest_params = []
+    for name, param in model.named_parameters():
+        if name not in seen_names:
+            rest_params.append(param)
+            seen_names.add(name)
+            
+    if rest_params:
+        param_groups.append({
+            "params": rest_params, 
+            "lr": base_lr * (decay_rate ** n_stages)
         })
 
     return param_groups
